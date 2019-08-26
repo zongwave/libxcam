@@ -31,7 +31,12 @@
 #include <immintrin.h>
 #endif
 
+#if ENABLE_AVX512
 #define XCAM_SOFT_WORKUNIT_PIXELS 16
+#define DUMP_AVX_INTERPOLATION 0
+#else
+#define XCAM_SOFT_WORKUNIT_PIXELS 8
+#endif
 
 namespace XCam {
 
@@ -384,6 +389,7 @@ SoftImage<T>::read_interpolate_data (float x, float y) const
            l1[0] * ((1 - a) * b) + l0[1] * (a * (1 - b));
 }
 
+#if !ENABLE_AVX512
 template <typename T> template<typename O, uint32_t N>
 void
 SoftImage<T>::read_interpolate_array (Float2 *pos, O *array) const
@@ -392,8 +398,136 @@ SoftImage<T>::read_interpolate_array (Float2 *pos, O *array) const
         array[i] = read_interpolate_data<O> (pos[i].x, pos[i].y);
     }
 }
+#endif
 
 #if ENABLE_AVX512
+
+template <typename T> template<typename O, uint32_t N>
+void
+SoftImage<T>::read_interpolate_array (Float2 *pos, O *array) const
+{
+    Float2 weight[16];
+    O tl[16];
+    O tr[16];
+    O bl[16];
+    O br[16];
+    for (uint32_t i = 0; i < N; ++i) {
+        int32_t x0 = (int32_t)(pos[i].x);
+        int32_t y0 = (int32_t)(pos[i].y);
+        float a = pos[i].x - x0;
+        float b = pos[i].y - y0;
+        O l0[2], l1[2];
+
+        weight[i].x = a;
+        weight[i].y = b;
+
+        int32_t x = x0;
+        int32_t y = y0;
+
+        border_check_y (y);
+        const T *t_ptr0 = ((const T *)(_buf_ptr + y * _pitch));
+
+        border_check_x (x);
+        l0[0] = t_ptr0[x++];
+        border_check_x (x);
+        l0[1] = t_ptr0[x];
+
+        x = x0, y = y0 + 1;
+        border_check_y (y);
+        const T *t_ptr1 = ((const T *)(_buf_ptr + y * _pitch));
+
+        border_check_x (x);
+        l1[0] = t_ptr1[x++];
+        border_check_x (x);
+        l1[1] = t_ptr1[x];
+
+        tl[i] = l0[0];
+        tr[i] = l0[1];
+        bl[i] = l1[0];
+        br[i] = l1[1];
+
+        array[i] = l1[1] * (a * b) + l0[0] * ((1 - a) * (1 - b)) +
+                   l1[0] * ((1 - a) * b) + l0[1] * (a * (1 - b));
+    }
+
+#if 0
+    XCAM_LOG_ERROR ("\n @ZONGWAVE AVX-CPU interpolate coordinate \n lut_pos=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tl_cpu_coord=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tr_cpu_coord=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n bl_cpu_coord=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n br_cpu_coord=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n weight_x=[%f %f %f %f %f %f %f %f]; \n weight_y=[%f %f %f %f %f %f %f %f]; \n interp_cpu_coord=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n @ZONGWAVE AVX-CPU \n\n",
+                    pos[0].x, pos[0].y, pos[1].x, pos[1].y, pos[2].x, pos[2].y, pos[3].x, pos[3].y,
+                    pos[4].x, pos[4].y, pos[5].x, pos[5].y, pos[6].x, pos[6].y, pos[7].x, pos[7].y,
+                    tl[0].x, tl[0].y, tl[1].x, tl[1].y,
+                    tl[2].x, tl[2].y, tl[3].x, tl[3].y,
+                    tl[4].x, tl[4].y, tl[5].x, tl[5].y,
+                    tl[6].x, tl[6].y, tl[7].x, tl[7].y,
+                    tr[0].x, tr[0].y, tr[1].x, tr[1].y,
+                    tr[2].x, tr[2].y, tr[3].x, tr[3].y,
+                    tr[4].x, tr[4].y, tr[5].x, tr[5].y,
+                    tr[6].x, tr[6].y, tr[7].x, tr[7].y,
+                    bl[0].x, bl[0].y, bl[1].x, bl[1].y,
+                    bl[2].x, bl[2].y, bl[3].x, bl[3].y,
+                    bl[4].x, bl[4].y, bl[5].x, bl[5].y,
+                    bl[6].x, bl[6].y, bl[7].x, bl[7].y,
+                    br[0].x, br[0].y, br[1].x, br[1].y,
+                    br[2].x, br[2].y, br[3].x, br[3].y,
+                    br[4].x, br[4].y, br[5].x, br[5].y,
+                    br[6].x, br[6].y, br[7].x, br[7].y,
+                    weight[0].x, weight[1].x, weight[2].x, weight[3].x,
+                    weight[4].x, weight[5].x, weight[6].x, weight[7].x,
+                    weight[0].y, weight[1].y, weight[2].y, weight[3].y,
+                    weight[4].y, weight[5].y, weight[6].y, weight[7].y,
+                    array[0].x, array[0].y, array[1].x, array[1].y,
+                    array[2].x, array[2].y, array[3].x, array[3].y,
+                    array[4].x, array[4].y, array[5].x, array[5].y,
+                    array[6].x, array[6].y, array[7].x, array[7].y);
+#endif
+#if 0  // luma Y
+    XCAM_LOG_ERROR ("\n @ZONGWAVE AVX-CPU interpolate luma \n lut_pos=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tl_avx_pixel=[%f %f %f %f %f %f %f %f]; \n tr_avx_pixel=[%f %f %f %f %f %f %f %f]; \n bl_avx_pixel=[%f %f %f %f %f %f %f %f]; \n br_avx_pixel=[%f %f %f %f %f %f %f %f]; \n weight_x=[%f %f %f %f %f %f %f %f]; \n weight_y=[%f %f %f %f %f %f %f %f]; \n interp_avx_y_pixel=[%f %f %f %f %f %f %f %f]; \n \n lut_pos=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tl_avx_pixel=[%f %f %f %f %f %f %f %f]; \n tr_avx_pixel=[%f %f %f %f %f %f %f %f]; \n bl_avx_pixel=[%f %f %f %f %f %f %f %f]; \n br_avx_pixel=[%f %f %f %f %f %f %f %f]; \n weight_x=[%f %f %f %f %f %f %f %f]; \n weight_y=[%f %f %f %f %f %f %f %f]; \n interp_avx_y_pixel=[%f %f %f %f %f %f %f %f]; \n @ZONGWAVE AVX-CPU \n\n",
+                    pos[0].x, pos[0].y, pos[1].x, pos[1].y, pos[2].x, pos[2].y, pos[3].x, pos[3].y,
+                    pos[4].x, pos[4].y, pos[5].x, pos[5].y, pos[6].x, pos[6].y, pos[7].x, pos[7].y,
+                    tl[0], tl[1], tl[2], tl[3], tl[4], tl[5], tl[6], tl[7],
+                    tr[0], tr[1], tr[2], tr[3], tr[4], tr[5], tr[6], tr[7],
+                    bl[0], bl[1], bl[2], bl[3], bl[4], bl[5], bl[6], bl[7],
+                    br[0], br[1], br[2], br[3], br[4], br[5], br[6], br[7],
+                    weight[0].x, weight[1].x, weight[2].x, weight[3].x,
+                    weight[4].x, weight[5].x, weight[6].x, weight[7].x,
+                    weight[0].y, weight[1].y, weight[2].y, weight[3].y,
+                    weight[4].y, weight[5].y, weight[6].y, weight[7].y,
+                    array[0], array[1], array[2], array[3],
+                    array[4], array[5], array[6], array[7],
+                    pos[8].x, pos[8].y, pos[9].x, pos[9].y, pos[10].x, pos[10].y, pos[11].x, pos[11].y,
+                    pos[12].x, pos[12].y, pos[13].x, pos[13].y, pos[14].x, pos[14].y, pos[15].x, pos[15].y,
+                    tl[8], tl[9], tl[10], tl[11], tl[12], tl[13], tl[14], tl[15],
+                    tr[8], tr[9], tr[10], tr[11], tr[12], tr[13], tr[14], tr[15],
+                    bl[8], bl[9], bl[10], bl[11], bl[12], bl[13], bl[14], bl[15],
+                    br[8], br[9], br[10], br[11], br[12], br[13], br[14], br[15],
+                    weight[8].x, weight[9].x, weight[10].x, weight[11].x,
+                    weight[12].x, weight[13].x, weight[14].x, weight[15].x,
+                    weight[8].y, weight[9].y, weight[10].y, weight[11].y,
+                    weight[12].y, weight[13].y, weight[14].y, weight[15].y,
+                    array[8], array[9], array[10], array[11],
+                    array[12], array[13], array[14], array[15]);
+#endif
+#if 0   //chroma uv
+    XCAM_LOG_ERROR ("\n @ZONGWAVE AVX-CPU interpolate chroma \n lut_pos=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tl_avx_pixel=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tr_avx_pixel=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n bl_avx_pixel=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n br_avx_pixel=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n weight_x=[%f %f %f %f %f %f %f %f]; \n weight_y=[%f %f %f %f %f %f %f %f]; \n interp_avx_uv_pixel=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n @ZONGWAVE AVX-CPU \n\n",
+                    pos[0].x, pos[0].y, pos[1].x, pos[1].y, pos[2].x, pos[2].y, pos[3].x, pos[3].y,
+                    pos[4].x, pos[4].y, pos[5].x, pos[5].y, pos[6].x, pos[6].y, pos[7].x, pos[7].y,
+                    tl[0].x, tl[0].y, tl[1].x, tl[1].y, tl[2].x, tl[2].y, tl[3].x, tl[3].y,
+                    tl[4].x, tl[4].y, tl[5].x, tl[5].y, tl[6].x, tl[6].y, tl[7].x, tl[7].y,
+                    tr[0].x, tr[0].y, tr[1].x, tr[1].y, tr[2].x, tr[2].y, tr[3].x, tr[3].y,
+                    tr[4].x, tr[4].y, tr[5].x, tr[5].y, tr[6].x, tr[6].y, tr[7].x, tr[7].y,
+                    bl[0].x, bl[0].y, bl[1].x, bl[1].y, bl[2].x, bl[2].y, bl[3].x, bl[3].y,
+                    bl[4].x, bl[4].y, bl[5].x, bl[5].y, bl[6].x, bl[6].y, bl[7].x, bl[7].y,
+                    br[0].x, br[0].y, br[1].x, br[1].y, br[2].x, br[2].y, br[3].x, br[3].y,
+                    br[4].x, br[4].y, br[5].x, br[5].y, br[6].x, br[6].y, br[7].x, br[7].y,
+                    weight[0].x, weight[1].x, weight[2].x, weight[3].x,
+                    weight[4].x, weight[5].x, weight[6].x, weight[7].x,
+                    weight[0].y, weight[1].y, weight[2].y, weight[3].y,
+                    weight[4].y, weight[5].y, weight[6].y, weight[7].y,
+                    array[0].x, array[0].y, array[1].x, array[1].y,
+                    array[2].x, array[2].y, array[3].x, array[3].y,
+                    array[4].x, array[4].y, array[5].x, array[5].y,
+                    array[6].x, array[6].y, array[7].x, array[7].y);
+#endif
+}
 
 // interpolate 8 pixels position
 // result = p00 * (1 - weight.x) * (1 - weight.y) +
@@ -452,6 +586,43 @@ SoftImage<T>::read_interpolate_array (Float2 *pos, Float2 *array) const
 
         _mm512_storeu_ps (dest, interp_value);
         dest += 8;
+
+#if DUMP_AVX_INTERPOLATION
+        XCAM_LOG_ERROR ("\n @ZONGWAVE AVX interpolate coordinate \n image_pitch=[%d] \n lut_pos=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tl_avx_coord=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tr_avx_coord=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n bl_avx_coord=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n br_avx_coord=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n weight_x=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n weight_y=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n interp_avx_coord=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n @ZONGWAVE AVX \n\n",
+                        _pitch,
+                        ((float*)&interp_pos)[0], ((float*)&interp_pos)[1], ((float*)&interp_pos)[2], ((float*)&interp_pos)[3],
+                        ((float*)&interp_pos)[4], ((float*)&interp_pos)[5], ((float*)&interp_pos)[6], ((float*)&interp_pos)[7],
+                        ((float*)&interp_pos)[8], ((float*)&interp_pos)[9], ((float*)&interp_pos)[10], ((float*)&interp_pos)[11],
+                        ((float*)&interp_pos)[12], ((float*)&interp_pos)[13], ((float*)&interp_pos)[14], ((float*)&interp_pos)[15],
+                        ((float*)&tl)[0], ((float*)&tl)[1], ((float*)&tl)[2], ((float*)&tl)[3],
+                        ((float*)&tl)[4], ((float*)&tl)[5], ((float*)&tl)[6], ((float*)&tl)[7],
+                        ((float*)&tl)[8], ((float*)&tl)[9], ((float*)&tl)[10], ((float*)&tl)[11],
+                        ((float*)&tl)[12], ((float*)&tl)[13], ((float*)&tl)[14], ((float*)&tl)[15],
+                        ((float*)&tr)[0], ((float*)&tr)[1], ((float*)&tr)[2], ((float*)&tr)[3],
+                        ((float*)&tr)[4], ((float*)&tr)[5], ((float*)&tr)[6], ((float*)&tr)[7],
+                        ((float*)&tr)[8], ((float*)&tr)[9], ((float*)&tr)[10], ((float*)&tr)[11],
+                        ((float*)&tr)[12], ((float*)&tr)[13], ((float*)&tr)[14], ((float*)&tr)[15],
+                        ((float*)&bl)[0], ((float*)&bl)[1], ((float*)&bl)[2], ((float*)&bl)[3],
+                        ((float*)&bl)[4], ((float*)&bl)[5], ((float*)&bl)[6], ((float*)&bl)[7],
+                        ((float*)&bl)[8], ((float*)&bl)[9], ((float*)&bl)[10], ((float*)&bl)[11],
+                        ((float*)&bl)[12], ((float*)&bl)[13], ((float*)&bl)[14], ((float*)&bl)[15],
+                        ((float*)&br)[0], ((float*)&br)[1], ((float*)&br)[2], ((float*)&br)[3],
+                        ((float*)&br)[4], ((float*)&br)[5], ((float*)&br)[6], ((float*)&br)[7],
+                        ((float*)&br)[8], ((float*)&br)[9], ((float*)&br)[10], ((float*)&br)[11],
+                        ((float*)&br)[12], ((float*)&br)[13], ((float*)&br)[14], ((float*)&br)[15],
+                        ((float*)&weight_x)[0], ((float*)&weight_x)[1], ((float*)&weight_x)[2], ((float*)&weight_x)[3],
+                        ((float*)&weight_x)[4], ((float*)&weight_x)[5], ((float*)&weight_x)[6], ((float*)&weight_x)[7],
+                        ((float*)&weight_x)[8], ((float*)&weight_x)[9], ((float*)&weight_x)[10], ((float*)&weight_x)[11],
+                        ((float*)&weight_x)[12], ((float*)&weight_x)[13], ((float*)&weight_x)[14], ((float*)&weight_x)[15],
+                        ((float*)&weight_y)[0], ((float*)&weight_y)[1], ((float*)&weight_y)[2], ((float*)&weight_y)[3],
+                        ((float*)&weight_y)[4], ((float*)&weight_y)[5], ((float*)&weight_y)[6], ((float*)&weight_y)[7],
+                        ((float*)&weight_y)[8], ((float*)&weight_y)[9], ((float*)&weight_y)[10], ((float*)&weight_y)[11],
+                        ((float*)&weight_y)[12], ((float*)&weight_y)[13], ((float*)&weight_y)[14], ((float*)&weight_y)[15],
+                        array[0].x, array[0].y, array[1].x, array[1].y,
+                        array[2].x, array[2].y, array[3].x, array[3].y,
+                        array[4].x, array[4].y, array[5].x, array[5].y,
+                        array[6].x, array[6].y, array[7].x, array[7].y);
+#endif
     }
 }
 
@@ -463,6 +634,8 @@ SoftImage<T>::read_interpolate_array (Float2 *pos, Uchar *array) const
     __m256 const_one_float = _mm256_set1_ps (1.0f);
     __m256i const_pitch = _mm256_set1_epi32 (_pitch);
     __m256i const_one_int = _mm256_set1_epi32 (1);
+    __m256i index_x = _mm256_setr_epi32 (0, 2, 4, 6, 8, 10, 12, 14);
+    __m256i index_y = _mm256_setr_epi32 (1, 3, 5, 7, 9, 11, 13, 15);
 
     for (uint32_t i = 0; i < XCAM_SOFT_WORKUNIT_PIXELS / 8; i++) {
         // load 8 interpolate pos ((8 x float2) x 32bit)
@@ -470,8 +643,8 @@ SoftImage<T>::read_interpolate_array (Float2 *pos, Uchar *array) const
         __m512 interp_pos_xy = _mm512_floor_ps (interp_pos);
         __m512 interp_weight = _mm512_sub_ps (interp_pos, interp_pos_xy);
         float* weight = (float*)&interp_weight;
-        __m256 weight_x = _mm256_setr_ps (weight[0], weight[2], weight[4], weight[6], weight[8], weight[10], weight[12], weight[14]);
-        __m256 weight_y = _mm256_setr_ps (weight[1], weight[3], weight[5], weight[7], weight[9], weight[11], weight[13], weight[15]);
+        __m256 weight_x = _mm256_i32gather_ps ((float const*)weight, index_x, 4);
+        __m256 weight_y = _mm256_i32gather_ps ((float const*)weight, index_y, 4);
 
         int32_t pos_x0 = (int32_t)(pos[8 * i].x);
         border_check_x (pos_x0);
@@ -484,8 +657,8 @@ SoftImage<T>::read_interpolate_array (Float2 *pos, Uchar *array) const
 
         __m512i pos_index = _mm512_cvtps_epi32 (_mm512_sub_ps (interp_pos_xy, pos_00));
         int32_t* idx = (int32_t*) &pos_index;
-        __m256i pos_idx_x = _mm256_setr_epi32 (idx[0], idx[2], idx[4], idx[6], idx[8], idx[10], idx[12], idx[14]);
-        __m256i pos_idx_y = _mm256_setr_epi32 (idx[1], idx[3], idx[5], idx[7], idx[9], idx[11], idx[13], idx[15]);
+        __m256i pos_idx_x = _mm256_i32gather_epi32 ((int const*)idx, index_x, 4);
+        __m256i pos_idx_y = _mm256_i32gather_epi32 ((int const*)idx, index_y, 4);
 
         int32_t pos_y0 = (int32_t)(pos[8 * i].y);
         border_check_y (pos_y0);
@@ -525,6 +698,29 @@ SoftImage<T>::read_interpolate_array (Float2 *pos, Uchar *array) const
         _mm_store_ss (dest, (__m128)_mm256_extractf128_si256 (interp_value, 0));
         _mm_store_ss (dest + 1, (__m128)_mm256_extractf128_si256 (interp_value, 1));
         dest += 2;
+
+#if DUMP_AVX_INTERPOLATION
+        XCAM_LOG_ERROR ("\n @ZONGWAVE AVX interpolate luma \n image_pitch=[%d] \n lut_pos=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tl_avx_pixel=[%f %f %f %f %f %f %f %f]; \n tr_avx_pixel=[%f %f %f %f %f %f %f %f]; \n bl_avx_pixel=[%f %f %f %f %f %f %f %f]; \n br_avx_pixel=[%f %f %f %f %f %f %f %f]; \n weight_x=[%f %f %f %f %f %f %f %f]; \n weight_y=[%f %f %f %f %f %f %f %f]; \n interp_avx_y_pixel=[%d %d %d %d %d %d %d %d]; \n @ZONGWAVE AVX \n\n",
+                        _pitch,
+                        ((float*)&interp_pos)[0], ((float*)&interp_pos)[1], ((float*)&interp_pos)[2], ((float*)&interp_pos)[3],
+                        ((float*)&interp_pos)[4], ((float*)&interp_pos)[5], ((float*)&interp_pos)[6], ((float*)&interp_pos)[7],
+                        ((float*)&interp_pos)[8], ((float*)&interp_pos)[9], ((float*)&interp_pos)[10], ((float*)&interp_pos)[11],
+                        ((float*)&interp_pos)[12], ((float*)&interp_pos)[13], ((float*)&interp_pos)[14], ((float*)&interp_pos)[15],
+                        ((float*)&pixel_tl)[0], ((float*)&pixel_tl)[1], ((float*)&pixel_tl)[2], ((float*)&pixel_tl)[3],
+                        ((float*)&pixel_tl)[4], ((float*)&pixel_tl)[5], ((float*)&pixel_tl)[6], ((float*)&pixel_tl)[7],
+                        ((float*)&pixel_tr)[0], ((float*)&pixel_tr)[1], ((float*)&pixel_tr)[2], ((float*)&pixel_tr)[3],
+                        ((float*)&pixel_tr)[4], ((float*)&pixel_tr)[5], ((float*)&pixel_tr)[6], ((float*)&pixel_tr)[7],
+                        ((float*)&pixel_bl)[0], ((float*)&pixel_bl)[1], ((float*)&pixel_bl)[2], ((float*)&pixel_bl)[3],
+                        ((float*)&pixel_bl)[4], ((float*)&pixel_bl)[5], ((float*)&pixel_bl)[6], ((float*)&pixel_bl)[7],
+                        ((float*)&pixel_br)[0], ((float*)&pixel_br)[1], ((float*)&pixel_br)[2], ((float*)&pixel_br)[3],
+                        ((float*)&pixel_br)[4], ((float*)&pixel_br)[5], ((float*)&pixel_br)[6], ((float*)&pixel_br)[7],
+                        ((float*)&weight_x)[0], ((float*)&weight_x)[1], ((float*)&weight_x)[2], ((float*)&weight_x)[3],
+                        ((float*)&weight_x)[4], ((float*)&weight_x)[5], ((float*)&weight_x)[6], ((float*)&weight_x)[7],
+                        ((float*)&weight_y)[0], ((float*)&weight_y)[1], ((float*)&weight_y)[2], ((float*)&weight_y)[3],
+                        ((float*)&weight_y)[4], ((float*)&weight_y)[5], ((float*)&weight_y)[6], ((float*)&weight_y)[7],
+                        array[0], array[1], array[2], array[3],
+                        array[4], array[5], array[6], array[7]);
+#endif
     }
 }
 
@@ -537,6 +733,8 @@ SoftImage<T>::read_interpolate_array (Float2 *pos, Uchar2 *array) const
     __m512 const_one_float = _mm512_set1_ps (1.0f);
     __m256i const_pitch = _mm256_set1_epi32 (_pitch / 2);
     __m256i const_one_int = _mm256_set1_epi32 (1);
+    __m256i index_x = _mm256_setr_epi32 (0, 2, 4, 6, 8, 10, 12, 14);
+    __m256i index_y = _mm256_setr_epi32 (1, 3, 5, 7, 9, 11, 13, 15);
 
     // load 8 interpolate pos ((8 x float2) x 32bit)
     __m512 interp_pos = _mm512_loadu_ps (pos);
@@ -558,8 +756,8 @@ SoftImage<T>::read_interpolate_array (Float2 *pos, Uchar2 *array) const
 
     __m512i pos_index = _mm512_cvtps_epi32 (_mm512_sub_ps (interp_pos_xy, pos_00));
     int32_t* idx = (int32_t*) &pos_index;
-    __m256i pos_idx_x = _mm256_setr_epi32 (idx[0], idx[2], idx[4], idx[6], idx[8], idx[10], idx[12], idx[14]);
-    __m256i pos_idx_y = _mm256_setr_epi32 (idx[1], idx[3], idx[5], idx[7], idx[9], idx[11], idx[13], idx[15]);
+    __m256i pos_idx_x = _mm256_i32gather_epi32 ((int const*)idx, index_x, 4);
+    __m256i pos_idx_y = _mm256_i32gather_epi32 ((int const*)idx, index_y, 4);
 
     int32_t pos_y0 = (int32_t)(pos[0].y);
     border_check_y (pos_y0);
@@ -613,6 +811,41 @@ SoftImage<T>::read_interpolate_array (Float2 *pos, Uchar2 *array) const
     _mm_store_ss (dest + 1,  (__m128)_mm512_extractf32x4_ps ((__m512)interp_value, 1));
     _mm_store_ss (dest + 2,  (__m128)_mm512_extractf32x4_ps ((__m512)interp_value, 2));
     _mm_store_ss (dest + 3,  (__m128)_mm512_extractf32x4_ps ((__m512)interp_value, 3));
+
+#if DUMP_AVX_INTERPOLATION
+    XCAM_LOG_ERROR ("\n @ZONGWAVE AVX interpolate chroma \n image_pitch=[%d] \n lut_pos=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tl_avx_pixel=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n tr_avx_pixel=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n bl_avx_pixel=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n br_avx_pixel=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n weight_x=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n weight_y=[%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f]; \n interp_avx_uv_pixel=[%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d];  \n @ZONGWAVE AVX \n\n",
+                    _pitch,
+                    ((float*)&interp_pos)[0], ((float*)&interp_pos)[1], ((float*)&interp_pos)[2], ((float*)&interp_pos)[3],
+                    ((float*)&interp_pos)[4], ((float*)&interp_pos)[5], ((float*)&interp_pos)[6], ((float*)&interp_pos)[7],
+                    ((float*)&interp_pos)[8], ((float*)&interp_pos)[9], ((float*)&interp_pos)[10], ((float*)&interp_pos)[11],
+                    ((float*)&interp_pos)[12], ((float*)&interp_pos)[13], ((float*)&interp_pos)[14], ((float*)&interp_pos)[15],
+                    ((float*)&pixel_tl)[0], ((float*)&pixel_tl)[1], ((float*)&pixel_tl)[2], ((float*)&pixel_tl)[3],
+                    ((float*)&pixel_tl)[4], ((float*)&pixel_tl)[5], ((float*)&pixel_tl)[6], ((float*)&pixel_tl)[7],
+                    ((float*)&pixel_tl)[8], ((float*)&pixel_tl)[9], ((float*)&pixel_tl)[10], ((float*)&pixel_tl)[11],
+                    ((float*)&pixel_tl)[12], ((float*)&pixel_tl)[13], ((float*)&pixel_tl)[14], ((float*)&pixel_tl)[15],
+                    ((float*)&pixel_tr)[0], ((float*)&pixel_tr)[1], ((float*)&pixel_tr)[2], ((float*)&pixel_tr)[3],
+                    ((float*)&pixel_tr)[4], ((float*)&pixel_tr)[5], ((float*)&pixel_tr)[6], ((float*)&pixel_tr)[7],
+                    ((float*)&pixel_tr)[8], ((float*)&pixel_tr)[9], ((float*)&pixel_tr)[10], ((float*)&pixel_tr)[11],
+                    ((float*)&pixel_tr)[12], ((float*)&pixel_tr)[13], ((float*)&pixel_tr)[14], ((float*)&pixel_tr)[15],
+                    ((float*)&pixel_bl)[0], ((float*)&pixel_bl)[1], ((float*)&pixel_bl)[2], ((float*)&pixel_bl)[3],
+                    ((float*)&pixel_bl)[4], ((float*)&pixel_bl)[5], ((float*)&pixel_bl)[6], ((float*)&pixel_bl)[7],
+                    ((float*)&pixel_bl)[8], ((float*)&pixel_bl)[9], ((float*)&pixel_bl)[10], ((float*)&pixel_bl)[11],
+                    ((float*)&pixel_bl)[12], ((float*)&pixel_bl)[13], ((float*)&pixel_bl)[14], ((float*)&pixel_bl)[15],
+                    ((float*)&pixel_br)[0], ((float*)&pixel_br)[1], ((float*)&pixel_br)[2], ((float*)&pixel_br)[3],
+                    ((float*)&pixel_br)[4], ((float*)&pixel_br)[5], ((float*)&pixel_br)[6], ((float*)&pixel_br)[7],
+                    ((float*)&pixel_br)[8], ((float*)&pixel_br)[9], ((float*)&pixel_br)[10], ((float*)&pixel_br)[11],
+                    ((float*)&pixel_br)[12], ((float*)&pixel_br)[13], ((float*)&pixel_br)[14], ((float*)&pixel_br)[15],
+                    ((float*)&weight_x)[0], ((float*)&weight_x)[1], ((float*)&weight_x)[2], ((float*)&weight_x)[3],
+                    ((float*)&weight_x)[4], ((float*)&weight_x)[5], ((float*)&weight_x)[6], ((float*)&weight_x)[7],
+                    ((float*)&weight_x)[8], ((float*)&weight_x)[9], ((float*)&weight_x)[10], ((float*)&weight_x)[11],
+                    ((float*)&weight_x)[12], ((float*)&weight_x)[13], ((float*)&weight_x)[14], ((float*)&weight_x)[15],
+                    ((float*)&weight_y)[0], ((float*)&weight_y)[1], ((float*)&weight_y)[2], ((float*)&weight_y)[3],
+                    ((float*)&weight_y)[4], ((float*)&weight_y)[5], ((float*)&weight_y)[6], ((float*)&weight_y)[7],
+                    ((float*)&weight_y)[8], ((float*)&weight_y)[9], ((float*)&weight_y)[10], ((float*)&weight_y)[11],
+                    ((float*)&weight_y)[12], ((float*)&weight_y)[13], ((float*)&weight_y)[14], ((float*)&weight_y)[15],
+                    array[0].x, array[0].y, array[1].x, array[1].y, array[2].x, array[2].y, array[3].x, array[3].y,
+                    array[4].x, array[4].y, array[5].x, array[5].y, array[6].x, array[6].y, array[7].x, array[7].y);
+#endif
 }
 
 #endif
